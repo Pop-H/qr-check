@@ -36,7 +36,7 @@
 </head>
 <body>
 
-<header>QR合否判定システム（2回読み徹底ガード版）</header>
+<header>QR合否判定システム（見本データ全表示版）</header>
 
 <div class="container">
     <div id="setup-view" class="config-section">
@@ -78,15 +78,14 @@ let currentStep = 1;
 let targetHonku = "";
 let targetJiku = "";
 let html5QrCode;
-let isLock = false; // 連続読み取りを防ぐロックフラグ
+let isLock = false; 
 
 let debugData = {
     step1Raw: "",
     kanbanHonku: "未検出",
     kanbanJiku: "未検出",
     kanbanPartNo: "未検出",
-    step2Raw: "",
-    mihonPartNo: "未検出"
+    step2Raw: ""
 };
 
 window.onload = () => {
@@ -137,7 +136,7 @@ function initScanner() {
 }
 
 function onScanSuccess(decodedText) {
-    if (isLock) return; // ロック中なら完全に無視
+    if (isLock) return; 
 
     if (currentStep === 1) {
         handleKanbanScan(decodedText);
@@ -148,13 +147,11 @@ function onScanSuccess(decodedText) {
 
 // ステップ1: サイクルかんばん
 function handleKanbanScan(data) {
-    // 誤って最初に見本QRを通した場合のガード
     if (data.startsWith("ISLB") || data.length < 100) { 
-        // かんばんデータは必ず長大（251文字等）なので、短い文字数は見本とみなして弾く
         return; 
     }
 
-    isLock = true; // 即座にロックをかける
+    isLock = true; 
 
     const tokens = data.trim().split(/\s+/);
     let scannedHonku = "";
@@ -173,14 +170,12 @@ function handleKanbanScan(data) {
     debugData.kanbanHonku = scannedHonku || "検出不能";
     debugData.kanbanJiku = scannedJiku || "空白または検出不能";
 
-    // 本区・次区チェック
     if (scannedHonku !== targetHonku || (targetJiku !== "" && scannedJiku !== targetJiku)) {
         showFinalResult(false, `【NG】他部署のサイクルかんばんです。`);
         isLock = false;
         return;
     }
 
-    // 品番(K0)の抽出
     let foundPartNo = "";
     for (const token of tokens) {
         if (token.startsWith("K0") && token.length >= 12) {
@@ -201,7 +196,6 @@ function handleKanbanScan(data) {
         return;
     }
 
-    // 画面表示を2手目（見本待ち）に切り替える
     document.getElementById('badge-step1').classList.remove('active');
     document.getElementById('badge-step2').classList.add('active');
     document.getElementById('step-title').innerText = "【2手目】見本のQRコードをかざしてください";
@@ -210,38 +204,38 @@ function handleKanbanScan(data) {
     const liveDebug = document.getElementById('live-debug');
     liveDebug.style.display = "block";
     liveDebug.innerHTML = `<div class="debug-title">▼ 1手目：かんばん読込成功 (2手目受付中)</div>` +
-                           `・抽出品番(10桁): <span style="color:blue;font-weight:bold;">${debugData.kanbanPartNo}</span><br>` +
-                           `<small style="color:green;">※2秒間、同じQRの連読みを防ぐガードが作動しました。そのまま見本をかざしてください。</small>`;
+                           `・抽出品番(10桁): <span style="color:blue;font-weight:bold;">${debugData.kanbanPartNo}</span>`;
 
     currentStep = 2;
 
-    // ★重要：2秒（2000ms）経ったらロックを解除し、次の「見本QR」を受け付ける
-    setTimeout(() => {
-        isLock = false;
-    }, 2000);
-    
+    setTimeout(() => { isLock = false; }, 2000);
     vibrate(100);
 }
 
-// ステップ2: 見本QR
+// ステップ2: 見本QR（★最強の「大文字小文字無視・文字お掃除」突合へ）
 function handleMihonScan(data) {
-    // 1手目で読んだ「かんばん」と完全に同じ文字列だったら、連読みバグとみなして完全にスルーする
     if (data === debugData.step1Raw) {
         return;
     }
 
-    isLock = true; // ロック
+    isLock = true; 
     debugData.step2Raw = data;
     
+    // かんばんから取った10桁（例: 0159874220）
     const target = debugData.kanbanPartNo;
+    // 頭の0を除いた9桁（例: 1598744220 の場合は 598744220）
     const targetShort = target.startsWith("0") ? target.substring(1) : target;
 
+    // 【お掃除処理】比較しやすくするため、大文字小文字をすべて「小文字」に統一し、ハイフンも消す
+    const cleanMihonData = data.toLowerCase().replace(/-/g, "");
+    const cleanTarget = target.toLowerCase();
+    const cleanTargetShort = targetShort.toLowerCase();
+
+    // 突合チェック
     let isMatch = false;
-    if (data.includes(target) || data.includes(targetShort)) {
+    if (cleanMihonData.includes(cleanTarget) || cleanMihonData.includes(cleanTargetShort)) {
         isMatch = true;
     }
-
-    debugData.mihonPartNo = "データ照合完了";
 
     if (!isMatch) {
         showFinalResult(false, "使用するサイクルかんばんと見本が異なります。");
@@ -281,16 +275,13 @@ function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
     }
     document.getElementById('result-content').innerHTML = html;
 
+    // ★重要：NGの時は見本QRのデータを全て削らず表示する仕様
     const resDebug = document.getElementById('result-debug');
     resDebug.innerHTML = `<div class="debug-title">📊 突合データの内訳（検証用）</div>` +
-                          `・設定本区 : ${targetHonku} ｜ 設定次区 : ${targetJiku || "指定なし"}<br>` +
-                          `・かんばん本区 : ${debugData.kanbanHonku} ｜ かんばん次区 : ${debugData.kanbanJiku}<br>` +
-                          `─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─<br>` +
                           `・かんばん品番 : <span style="font-weight:bold; font-size:1rem;">${debugData.kanbanPartNo}</span><br>` +
-                          `・見本側データ結果 : <span style="font-weight:bold; font-size:0.9rem;">${isSuccess ? '品番一致を確認' : '不一致'}</span><br>` +
                           `─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─<br>` +
-                          `<small style="opacity:0.8;">※かんばん生データの長さ: ${debugData.step1Raw.length}文字<br>` +
-                          `※見本生データの長さ: ${debugData.step2Raw.length}文字</small>`;
+                          `【見本QRコードの全文字データ】<br>` +
+                          `<div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; font-size:0.75rem; margin-top:5px; word-break:break-all;">${debugData.step2Raw}</div>`;
 }
 
 function resetAll() {
