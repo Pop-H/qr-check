@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>QR判定システム（データ視認版）</title>
+    <title>QR判定システム</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root { --ok-color: #28a745; --ng-color: #dc3545; --main-bg: #f8f9fa; }
@@ -25,7 +25,6 @@
         .result-card { display: none; padding: 20px; border-radius: 10px; color: white; margin-top: 20px; box-sizing: border-box; }
         .tekin-display { font-size: 5.5rem; font-weight: bold; display: block; margin: 10px 0; background: white; color: black; border-radius: 10px; letter-spacing: 2px; }
         
-        /* デバッグ表示用のスタイル */
         .debug-box { background: rgba(0, 0, 0, 0.05); border: 1px dashed #6c757d; padding: 10px; text-align: left; font-family: monospace; font-size: 0.85rem; color: #333; margin-top: 15px; border-radius: 5px; word-break: break-all; }
         .debug-title { font-weight: bold; color: #000; border-bottom: 1px solid #ccc; margin-bottom: 5px; padding-bottom: 2px; }
         .res-debug { background: rgba(255, 255, 255, 0.2); border: 1px solid white; color: white; }
@@ -50,9 +49,7 @@
         <h3 id="step-title" style="margin-top:0; color:#333;">サイクルかんばんを読み取ってください</h3>
         <div id="reader"></div>
         <div id="zoom-tips" class="zoom-info">※細かいQRです。少し離してピントを合わせてください</div>
-        
         <div id="live-debug" class="debug-box" style="display:none;"></div>
-        
         <button class="cancel" onclick="resetAll()">キャンセル</button>
     </div>
 
@@ -74,7 +71,6 @@ let targetHonku = "";
 let targetJiku = "";
 let html5QrCode;
 
-// 判定用に抽出したデータを記憶する変数
 let debugData = {
     step1Raw: "",
     kanbanHonku: "未検出",
@@ -143,7 +139,6 @@ function onScanSuccess(decodedText) {
 function handleKanbanScan(data) {
     debugData.step1Raw = data;
     
-    // 【バグ防止用】もし間違えて「見本QR(ISLB)」を先に読んじゃったら警告してストップ
     if (data.startsWith("ISLB")) {
         alert("【警告】最初に見本QRコードが読まれてしまいました！\n目の細かい「サイクルかんばん」を先に認識させてください。");
         return;
@@ -165,38 +160,41 @@ function handleKanbanScan(data) {
     debugData.kanbanHonku = scannedHonku || "検出不能";
     debugData.kanbanJiku = scannedJiku || "空白または検出不能";
 
-    // 本区チェック
+    // 本区・次区チェック
     if (scannedHonku !== targetHonku) {
         showFinalResult(false, `【NG】他部署のサイクルかんばんです。`);
         return;
     }
-    // 次区チェック
     if (targetJiku !== "" && scannedJiku !== targetJiku) {
         showFinalResult(false, `【NG】他部署のサイクルかんばんです。(次区不一致)`);
         return;
     }
 
-    // 品番(K)の抽出
+    // ★改良：品番(K0)の抽出ロジックの修正
     let foundPartNo = "";
     for (const token of tokens) {
-        if (token.startsWith("K") && token.length >= 11) {
-            foundPartNo = token.substring(1, 11); 
+        // K0から始まる12桁以上の塊（例：K01598743050）を探す
+        if (token.startsWith("K0") && token.length >= 12) {
+            foundPartNo = token.substring(2, 12); // K0の後の10桁を正確に切り出す
             break;
         }
     }
+    
+    // バックアップ：空白区切りが上手くいかない場合、文字列全体から「K0」を検索
     if (!foundPartNo) {
-        const kIndex = data.indexOf("K");
-        if (kIndex !== -1) foundPartNo = data.substring(kIndex + 1, kIndex + 11);
+        const k0Index = data.indexOf("K0");
+        if (k0Index !== -1) {
+            foundPartNo = data.substring(k0Index + 2, k0Index + 12);
+        }
     }
 
     debugData.kanbanPartNo = foundPartNo || "検出不能";
 
     if (!foundPartNo) {
-        alert("かんばんから品番コード(K)を検出できませんでした。");
+        alert("かんばんから品番コード(K0)を検出できませんでした。");
         return;
     }
 
-    // カメラの下のデバッグ枠に、かんばんから取れたデータをリアルタイム表示
     const liveDebug = document.getElementById('live-debug');
     liveDebug.style.display = "block";
     liveDebug.innerHTML = `<div class="debug-title">▼ 1手目：かんばんデータ記憶完了</div>` +
@@ -264,7 +262,6 @@ function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
     }
     document.getElementById('result-content').innerHTML = html;
 
-    // 結果画面の下に、データの突き合わせ証拠をドカンと表示
     const resDebug = document.getElementById('result-debug');
     resDebug.innerHTML = `<div class="debug-title">📊 突合データの内訳（検証用）</div>` +
                           `・設定本区 : ${targetHonku} ｜ 設定次区 : ${targetJiku || "指定なし"}<br>` +
