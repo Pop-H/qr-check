@@ -3,29 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>QR判定ツール</title>
-    <!-- QR読み取りライブラリ -->
+    <title>QR判定ツール（改良版）</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root { --ok-color: #28a745; --ng-color: #dc3545; --main-bg: #f8f9fa; }
         body { font-family: sans-serif; margin: 0; background: var(--main-bg); text-align: center; overflow-x: hidden; }
         header { background: #343a40; color: white; padding: 10px; font-weight: bold; }
-        
         .container { padding: 15px; max-width: 500px; margin: auto; }
         .config-section { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
         select, button { width: 100%; padding: 12px; font-size: 1.1rem; margin-top: 10px; border-radius: 5px; border: 1px solid #ccc; }
-        
         button { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; }
         button.cancel { background: #6c757d; margin-top: 15px; }
-        
         #reader { width: 100%; background: black; border-radius: 8px; overflow: hidden; display: none; }
-        
-        .result-card { display: none; padding: 20px; border-radius: 10px; color: white; margin-top: 20px; animation: flash 0.5s ease; }
-        @keyframes flash { from { opacity: 0; } to { opacity: 1; } }
-
+        .result-card { display: none; padding: 20px; border-radius: 10px; color: white; margin-top: 20px; }
         .tekin-display { font-size: 5rem; font-weight: bold; display: block; margin: 10px 0; background: white; color: black; border-radius: 10px; }
         .info-label { font-size: 0.9rem; margin-top: 5px; opacity: 0.9; }
-        .status-msg { font-weight: bold; margin-bottom: 10px; }
+        .status-msg { font-weight: bold; margin-bottom: 10px; font-size: 1.5rem; }
+        .zoom-info { color: #fff; background: rgba(0,0,0,0.6); padding: 5px; font-size: 0.8rem; margin-top: 5px; border-radius: 3px; }
     </style>
 </head>
 <body>
@@ -33,7 +27,6 @@
 <header>QR合否判定システム</header>
 
 <div class="container">
-    <!-- 初期設定画面 -->
     <div id="setup-view" class="config-section">
         <label>【初期設定】</label>
         <select id="honku-select">
@@ -45,14 +38,13 @@
         <button onclick="startProcess()">スキャン開始</button>
     </div>
 
-    <!-- カメラ画面 -->
     <div id="scanner-view" style="display:none;">
         <h3 id="step-title">サイクルかんばんを読み取ってください</h3>
         <div id="reader"></div>
+        <div class="zoom-info">※細かいQRです。少し離してピントを合わせてください</div>
         <button class="cancel" onclick="resetAll()">キャンセル</button>
     </div>
 
-    <!-- 判定結果画面 -->
     <div id="result-view" class="result-card">
         <div id="result-content"></div>
         <button onclick="resetAll()" style="background:white; color:black; margin-top:20px;">次のスキャンへ</button>
@@ -66,19 +58,16 @@ const LOCATION_OPTIONS = {
     jiku: ["A200", "B300", "C400"]
 };
 
-let currentStep = 1; // 1: かんばん待ち, 2: 見本待ち
+let currentStep = 1; 
 let targetHonku = "";
 let kanbanPartNo = "";
 let html5QrCode;
 
-// 初期化：プルダウン生成と保存値の復元
 window.onload = () => {
     const hSelect = document.getElementById('honku-select');
     const jSelect = document.getElementById('jiku-select');
-    
     LOCATION_OPTIONS.honku.forEach(v => hSelect.add(new Option(v, v)));
     LOCATION_OPTIONS.jiku.forEach(v => jSelect.add(new Option(v, v)));
-
     if(localStorage.getItem('savedHonku')) hSelect.value = localStorage.getItem('savedHonku');
     if(localStorage.getItem('savedJiku')) jSelect.value = localStorage.getItem('savedJiku');
 };
@@ -89,7 +78,6 @@ function startProcess() {
         alert("本区を入力してください。");
         return;
     }
-    // 保存
     localStorage.setItem('savedHonku', targetHonku);
     localStorage.setItem('savedJiku', document.getElementById('jiku-select').value);
 
@@ -102,9 +90,35 @@ function startProcess() {
 
 function initScanner() {
     html5QrCode = new Html5Qrcode("reader");
-    const config = { fps: 10, qrbox: { width: 250, height: 250 } };
     
-    html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess);
+    // 改良：解像度を高めに設定し、JAMAの細かいQRを認識しやすくする
+    const config = { 
+        fps: 15, 
+        qrbox: function(viewfinderWidth, viewfinderHeight) {
+            return { width: viewfinderWidth * 0.75, height: viewfinderWidth * 0.75 };
+        },
+        videoConstraints: {
+            facingMode: "environment",
+            width: { ideal: 1920 }, // フルHD画質を要求
+            height: { ideal: 1080 }
+        }
+    };
+    
+    html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess)
+    .then(() => {
+        // カメラ起動成功後に自動ズームを試みる（端末が対応している場合）
+        setTimeout(() => {
+            const videoTrack = html5QrCode.getRunningTrack();
+            if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
+                const capabilities = videoTrack.getCapabilities();
+                if (capabilities.zoom) {
+                    // 最大ズームの20%〜30%程度に初期設定（近づけすぎ防止）
+                    const targetZoom = capabilities.zoom.min + (capabilities.zoom.max - capabilities.zoom.min) * 0.25;
+                    videoTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] });
+                }
+            }
+        }, 1000);
+    });
 }
 
 function onScanSuccess(decodedText) {
@@ -115,31 +129,57 @@ function onScanSuccess(decodedText) {
     }
 }
 
-// ステップ1: サイクルかんばん読み取り
+// ステップ1: サイクルかんばん読み取り（JAMA規格解析）
 function handleKanbanScan(data) {
-    // 見本用QR（ISLB開始）を先に読んだ場合のチェック
     if (data.startsWith("ISLB")) {
         alert("サイクルかんばんから読み込んでください。");
         return;
     }
 
-    // 本区の抽出 (T120の形式：アルファベット1文字+数字3文字)
-    // 仕様：データ内の「 T120 」などのパターンを探す。JAMA規格の固定位置付近を想定
-    const honkuMatch = data.match(/[A-Z]\d{3}/g);
-    const scannedHonku = honkuMatch ? honkuMatch[0] : "";
+    // 改良：JAMA規格の文字列を空白で区切って正確に位置を特定する
+    // 連続した空白を1つにまとめて分割
+    const tokens = data.trim().split(/\s+/);
+    
+    let scannedHonku = "";
+    if (tokens.length >= 3) {
+        // 通常のJAMA規格の並びであれば、2番目が本区(T120等)、3番目が次区(A200等)
+        scannedHonku = tokens[1];
+    } else {
+        // 万が一空白区切りが失敗した場合のバックアップ（文字列の後方から検索）
+        const fallbackMatch = data.match(/[A-Z]\d{3}/g);
+        if (fallbackMatch && fallbackMatch.length >= 2) {
+            scannedHonku = fallbackMatch[fallbackMatch.length - 2]; // 後ろから2番目
+        }
+    }
 
     if (scannedHonku !== targetHonku) {
-        showFinalResult(false, `読み込んだサイクルかんばん（${scannedHonku}）は他部署のサイクルかんばんです。`);
+        showFinalResult(false, `読み込んだサイクルかんばんは他部署のサイクルかんばんです。<br><small>(検出された本区: ${scannedHonku || '判定不能'})</small>`);
         return;
     }
 
-    // 品番の抽出 (K + 10桁)
-    const kIndex = data.indexOf("K");
-    if (kIndex === -1) {
-        alert("品番情報が見つかりません。正しいかんばんか確認してください。");
+    // 品番の抽出 (Kから始まる塊を見つける)
+    let foundPartNo = "";
+    for (const token of tokens) {
+        if (token.startsWith("K") && token.length >= 11) {
+            foundPartNo = token.substring(1, 11); // Kの後の10桁
+            break;
+        }
+    }
+
+    // バックアップ：もし空白区切りの中にKが見つからなかった場合
+    if (!foundPartNo) {
+        const kIndex = data.indexOf("K");
+        if (kIndex !== -1) {
+            foundPartNo = data.substring(kIndex + 1, kIndex + 11);
+        }
+    }
+
+    if (!foundPartNo) {
+        alert("品番情報(K)が見つかりません。正しいかんばんか確認してください。");
         return;
     }
-    kanbanPartNo = data.substring(kIndex + 1, kIndex + 11); // ハイフンなし10桁
+
+    kanbanPartNo = foundPartNo; // ハイフンなし10桁を保持
 
     // OKなら次のステップへ
     currentStep = 2;
@@ -149,7 +189,6 @@ function handleKanbanScan(data) {
 
 // ステップ2: 見本QR読み取り
 function handleMihonScan(data) {
-    // 品番の抽出 (ISLB以降の11桁 159874-3050)
     const partMatch = data.match(/\d{6}-\d{4}/);
     if (!partMatch) {
         alert("見本QRから品番を読み取れません。");
@@ -164,23 +203,23 @@ function handleMihonScan(data) {
     }
 
     // 全て一致
-    const tekin = mihonPartNoRaw.substring(7, 10); // ハイフン後4桁の頭3文字
+    const tekin = mihonPartNoRaw.substring(7, 10); 
     showFinalResult(true, "生産OK<br>最後にテーキンの確認してください。", mihonPartNoRaw, tekin);
 }
 
 function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
-    html5QrCode.stop();
+    if(html5QrCode) html5QrCode.stop();
     document.getElementById('scanner-view').style.display = 'none';
     const resView = document.getElementById('result-view');
     resView.style.display = 'block';
     resView.style.backgroundColor = isSuccess ? 'var(--ok-color)' : 'var(--ng-color)';
 
-    let html = `<div class="status-msg">${isSuccess ? '【一致】' : '【不一致】'}</div>`;
-    html += `<div>${msg}</div>`;
+    let html = `<div class="status-msg">${isSuccess ? '【 一致 】' : '【 NG 】'}</div>`;
+    html += `<div style="font-size:1.2rem; line-height:1.6;">${msg}</div>`;
     
     if (isSuccess) {
-        html += `<div class="info-label">品番コード</div><div>${partNo}</div>`;
-        html += `<div class="info-label">テーキン</div><span class="tekin-display">${tekin}</span>`;
+        html += `<div class="info-label" style="margin-top:20px;">品番コード</div><div style="font-size:1.8rem; font-weight:bold;">${partNo}</div>`;
+        html += `<div class="info-label" style="margin-top:15px;">テーキン</div><span class="tekin-display">${tekin}</span>`;
         vibrate([100, 50, 100]);
     } else {
         vibrate(500);
@@ -190,10 +229,8 @@ function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
 }
 
 function resetAll() {
-    if (html5QrCode) {
-        html5QrCode.stop().finally(() => {
-            location.reload();
-        });
+    if (html5QrCode && html5QrCode.isScanning) {
+        html5QrCode.stop().finally(() => { location.reload(); });
     } else {
         location.reload();
     }
