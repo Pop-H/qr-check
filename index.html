@@ -29,11 +29,14 @@
         .debug-title { font-weight: bold; color: #000; border-bottom: 1px solid #ccc; margin-bottom: 5px; padding-bottom: 2px; }
         .res-debug { background: rgba(255, 255, 255, 0.2); border: 1px solid white; color: white; }
         .res-debug .debug-title { color: white; border-bottom: 1px solid white; }
+        
+        .step-badge { background: #e9ecef; color: #495057; padding: 5px 10px; border-radius: 20px; font-size: 0.9rem; display: inline-block; margin-bottom: 10px; font-weight: bold; border: 1px solid #ced4da; }
+        .step-badge.active { background: #ffc107; color: #212529; border-color: #ffc107; }
     </style>
 </head>
 <body>
 
-<header>QR合否判定システム（品番切り出し修正版）</header>
+<header>QR合否判定システム（2回読み徹底ガード版）</header>
 
 <div class="container">
     <div id="setup-view" class="config-section">
@@ -46,7 +49,12 @@
     </div>
 
     <div id="scanner-view" style="display:none;">
-        <h3 id="step-title" style="margin-top:0; color:#333;">サイクルかんばんを読み取ってください</h3>
+        <div style="margin-bottom: 10px;">
+            <span id="badge-step1" class="step-badge active">1手目：かんばん待ち</span> ➔ 
+            <span id="badge-step2" class="step-badge">2手目：見本待ち</span>
+        </div>
+        <h3 id="step-title" style="margin-top:0; color:#0056b3;">【1手目】サイクルかんばんをかざしてください</h3>
+        
         <div id="reader"></div>
         <div id="zoom-tips" class="zoom-info">※細かいQRです。少し離してピントを合わせてください</div>
         <div id="live-debug" class="debug-box" style="display:none;"></div>
@@ -70,6 +78,7 @@ let currentStep = 1;
 let targetHonku = "";
 let targetJiku = "";
 let html5QrCode;
+let isLock = false; // 連続読み取りを防ぐロックフラグ
 
 let debugData = {
     step1Raw: "",
@@ -128,6 +137,8 @@ function initScanner() {
 }
 
 function onScanSuccess(decodedText) {
+    if (isLock) return; // ロック中なら完全に無視
+
     if (currentStep === 1) {
         handleKanbanScan(decodedText);
     } else {
@@ -137,13 +148,13 @@ function onScanSuccess(decodedText) {
 
 // ステップ1: サイクルかんばん
 function handleKanbanScan(data) {
-    debugData.step1Raw = data;
-    
-    // 安全弁
-    if (data.startsWith("ISLB")) {
-        alert("【警告】最初に見本QRコードが読まれてしまいました！\n目の細かい「サイクルかんばん」を先に認識させてください。");
-        return;
+    // 誤って最初に見本QRを通した場合のガード
+    if (data.startsWith("ISLB") || data.length < 100) { 
+        // かんばんデータは必ず長大（251文字等）なので、短い文字数は見本とみなして弾く
+        return; 
     }
+
+    isLock = true; // 即座にロックをかける
 
     const tokens = data.trim().split(/\s+/);
     let scannedHonku = "";
@@ -158,83 +169,91 @@ function handleKanbanScan(data) {
         if (matchH && matchH.length > 0) scannedHonku = matchH[0];
     }
 
+    debugData.step1Raw = data;
     debugData.kanbanHonku = scannedHonku || "検出不能";
     debugData.kanbanJiku = scannedJiku || "空白または検出不能";
 
     // 本区・次区チェック
-    if (scannedHonku !== targetHonku) {
+    if (scannedHonku !== targetHonku || (targetJiku !== "" && scannedJiku !== targetJiku)) {
         showFinalResult(false, `【NG】他部署のサイクルかんばんです。`);
-        return;
-    }
-    if (targetJiku !== "" && scannedJiku !== targetJiku) {
-        showFinalResult(false, `【NG】他部署のサイクルかんばんです。(次区不一致)`);
+        isLock = false;
         return;
     }
 
-    // 品番(K0)の抽出ロジック
+    // 品番(K0)の抽出
     let foundPartNo = "";
     for (const token of tokens) {
         if (token.startsWith("K0") && token.length >= 12) {
-            foundPartNo = token.substring(2, 12); // K0の後の10桁
+            foundPartNo = token.substring(2, 12); 
             break;
         }
     }
     if (!foundPartNo) {
         const k0Index = data.indexOf("K0");
-        if (k0Index !== -1) {
-            foundPartNo = data.substring(k0Index + 2, k0Index + 12);
-        }
+        if (k0Index !== -1) foundPartNo = data.substring(k0Index + 2, k0Index + 12);
     }
 
     debugData.kanbanPartNo = foundPartNo || "検出不能";
 
     if (!foundPartNo) {
         alert("かんばんから品番コード(K0)を検出できませんでした。");
+        isLock = false;
         return;
     }
 
+    // 画面表示を2手目（見本待ち）に切り替える
+    document.getElementById('badge-step1').classList.remove('active');
+    document.getElementById('badge-step2').classList.add('active');
+    document.getElementById('step-title').innerText = "【2手目】見本のQRコードをかざしてください";
+    document.getElementById('step-title').style.color = "#d9381e";
+
     const liveDebug = document.getElementById('live-debug');
     liveDebug.style.display = "block";
-    liveDebug.innerHTML = `<div class="debug-title">▼ 1手目：かんばんデータ記憶完了</div>` +
-                           `・設定本区: ${targetHonku}<br>` +
-                           `・読込本区: ${debugData.kanbanHonku}<br>` +
-                           `・抽出品番(10桁): <span style="color:blue;font-weight:bold;">${debugData.kanbanPartNo}</span>`;
+    liveDebug.innerHTML = `<div class="debug-title">▼ 1手目：かんばん読込成功 (2手目受付中)</div>` +
+                           `・抽出品番(10桁): <span style="color:blue;font-weight:bold;">${debugData.kanbanPartNo}</span><br>` +
+                           `<small style="color:green;">※2秒間、同じQRの連読みを防ぐガードが作動しました。そのまま見本をかざしてください。</small>`;
 
     currentStep = 2;
+
+    // ★重要：2秒（2000ms）経ったらロックを解除し、次の「見本QR」を受け付ける
+    setTimeout(() => {
+        isLock = false;
+    }, 2000);
+    
     vibrate(100);
-    document.getElementById('step-title').innerText = "見本のQRコードを読み取ってください";
 }
 
-// ステップ2: 見本QR（★長大文字列突合仕様に全面改修）
+// ステップ2: 見本QR
 function handleMihonScan(data) {
+    // 1手目で読んだ「かんばん」と完全に同じ文字列だったら、連読みバグとみなして完全にスルーする
+    if (data === debugData.step1Raw) {
+        return;
+    }
+
+    isLock = true; // ロック
     debugData.step2Raw = data;
     
-    // かんばんから取った10桁（例: 0159874220）
     const target = debugData.kanbanPartNo;
-    // 頭の0を除いた9桁（例: 159874220）
     const targetShort = target.startsWith("0") ? target.substring(1) : target;
 
-    // 見本データに品番が含まれているかチェック
     let isMatch = false;
     if (data.includes(target) || data.includes(targetShort)) {
         isMatch = true;
     }
 
-    debugData.mihonPartNo = "データ照合完了(長大文字列含む)";
+    debugData.mihonPartNo = "データ照合完了";
 
-    // 【判定】品番コードの突合
     if (!isMatch) {
         showFinalResult(false, "使用するサイクルかんばんと見本が異なります。");
+        isLock = false;
         return;
     }
 
-    // 【合格処理】テーキン抽出 (かんばん品番の末尾4桁の頭3文字)
+    // 合格処理：テーキン抽出 (かんばん品番の末尾4桁の頭3文字)
     const tekin = target.substring(target.length - 4, target.length - 1); 
 
-    // 表示用に綺麗にハイフンを入れる（例: 0159874220 ➔ 159874-4220）
     let displayPartNo = target;
     if (displayPartNo.length === 10) {
-        // 先頭の0を飛ばして 6桁-4桁 に整形
         displayPartNo = displayPartNo.substring(1, 6) + "-" + displayPartNo.substring(6, 10);
     }
 
@@ -270,8 +289,8 @@ function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
                           `・かんばん品番 : <span style="font-weight:bold; font-size:1rem;">${debugData.kanbanPartNo}</span><br>` +
                           `・見本側データ結果 : <span style="font-weight:bold; font-size:0.9rem;">${isSuccess ? '品番一致を確認' : '不一致'}</span><br>` +
                           `─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─<br>` +
-                          `<small style="opacity:0.8;">※かんばん生データ(頭40文字): ${debugData.step1Raw.substring(0, 40)}...<br>` +
-                          `※見本生データ(頭40文字): ${debugData.step2Raw.substring(0, 40)}...</small>`;
+                          `<small style="opacity:0.8;">※かんばん生データの長さ: ${debugData.step1Raw.length}文字<br>` +
+                          `※見本生データの長さ: ${debugData.step2Raw.length}文字</small>`;
 }
 
 function resetAll() {
