@@ -8,7 +8,7 @@
     <style>
         :root { --ok-color: #28a745; --ng-color: #dc3545; --main-bg: #f8f9fa; }
         body { font-family: sans-serif; margin: 0; background: var(--main-bg); text-align: center; overflow-x: hidden; }
-        header { background: #343a40; color: white; padding: 10px; font-weight: bold; font-size: 1.2rem; }
+        header { background: #343a40; color: white; padding: 10px; font-weight: bold; font-size: 1.1rem; }
         
         .container { padding: 15px; max-width: 500px; margin: auto; }
         .config-section { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; text-align: left; }
@@ -33,7 +33,7 @@
 </head>
 <body>
 
-<header>QR合否判定システム</header>
+<header>QR合否判定システム（品番切り出し修正版）</header>
 
 <div class="container">
     <div id="setup-view" class="config-section">
@@ -139,6 +139,7 @@ function onScanSuccess(decodedText) {
 function handleKanbanScan(data) {
     debugData.step1Raw = data;
     
+    // 安全弁
     if (data.startsWith("ISLB")) {
         alert("【警告】最初に見本QRコードが読まれてしまいました！\n目の細かい「サイクルかんばん」を先に認識させてください。");
         return;
@@ -170,17 +171,14 @@ function handleKanbanScan(data) {
         return;
     }
 
-    // ★改良：品番(K0)の抽出ロジックの修正
+    // 品番(K0)の抽出ロジック
     let foundPartNo = "";
     for (const token of tokens) {
-        // K0から始まる12桁以上の塊（例：K01598743050）を探す
         if (token.startsWith("K0") && token.length >= 12) {
-            foundPartNo = token.substring(2, 12); // K0の後の10桁を正確に切り出す
+            foundPartNo = token.substring(2, 12); // K0の後の10桁
             break;
         }
     }
-    
-    // バックアップ：空白区切りが上手くいかない場合、文字列全体から「K0」を検索
     if (!foundPartNo) {
         const k0Index = data.indexOf("K0");
         if (k0Index !== -1) {
@@ -207,35 +205,37 @@ function handleKanbanScan(data) {
     document.getElementById('step-title').innerText = "見本のQRコードを読み取ってください";
 }
 
-// ステップ2: 見本QR
+// ステップ2: 見本QR（★長大文字列突合仕様に全面改修）
 function handleMihonScan(data) {
     debugData.step2Raw = data;
-    let mihonPartNoRaw = "";
+    
+    // かんばんから取った10桁（例: 0159874220）
+    const target = debugData.kanbanPartNo;
+    // 頭の0を除いた9桁（例: 159874220）
+    const targetShort = target.startsWith("0") ? target.substring(1) : target;
 
-    const partMatch = data.match(/[0-9-]+/);
-    if (partMatch) mihonPartNoRaw = partMatch[0].trim();
-
-    const mihonPartNoClean = mihonPartNoRaw.replace(/-/g, "");
-    debugData.mihonPartNo = mihonPartNoClean || "検出不能";
-
-    if (!mihonPartNoClean || mihonPartNoClean.length < 5) {
-        alert("見本QRから品番を読み取れませんでした。");
-        return;
+    // 見本データに品番が含まれているかチェック
+    let isMatch = false;
+    if (data.includes(target) || data.includes(targetShort)) {
+        isMatch = true;
     }
 
-    // 品番の突合
-    if (mihonPartNoClean !== debugData.kanbanPartNo) {
+    debugData.mihonPartNo = "データ照合完了(長大文字列含む)";
+
+    // 【判定】品番コードの突合
+    if (!isMatch) {
         showFinalResult(false, "使用するサイクルかんばんと見本が異なります。");
         return;
     }
 
-    // 合格処理
-    const cleanLen = mihonPartNoClean.length;
-    const tekin = mihonPartNoClean.substring(cleanLen - 4, cleanLen - 1); 
+    // 【合格処理】テーキン抽出 (かんばん品番の末尾4桁の頭3文字)
+    const tekin = target.substring(target.length - 4, target.length - 1); 
 
-    let displayPartNo = mihonPartNoRaw;
-    if (!displayPartNo.includes("-") && displayPartNo.length === 10) {
-        displayPartNo = displayPartNo.substring(0, 6) + "-" + displayPartNo.substring(6, 10);
+    // 表示用に綺麗にハイフンを入れる（例: 0159874220 ➔ 159874-4220）
+    let displayPartNo = target;
+    if (displayPartNo.length === 10) {
+        // 先頭の0を飛ばして 6桁-4桁 に整形
+        displayPartNo = displayPartNo.substring(1, 6) + "-" + displayPartNo.substring(6, 10);
     }
 
     showFinalResult(true, "生産ＯＫ<br>最後にテーキンの確認してください。", displayPartNo, tekin);
@@ -268,10 +268,10 @@ function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
                           `・かんばん本区 : ${debugData.kanbanHonku} ｜ かんばん次区 : ${debugData.kanbanJiku}<br>` +
                           `─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─<br>` +
                           `・かんばん品番 : <span style="font-weight:bold; font-size:1rem;">${debugData.kanbanPartNo}</span><br>` +
-                          `・見本側品番   : <span style="font-weight:bold; font-size:1rem;">${debugData.mihonPartNo}</span><br>` +
+                          `・見本側データ結果 : <span style="font-weight:bold; font-size:0.9rem;">${isSuccess ? '品番一致を確認' : '不一致'}</span><br>` +
                           `─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─<br>` +
-                          `<small style="opacity:0.8;">※かんばん生データ(頭50文字): ${debugData.step1Raw.substring(0, 50)}...<br>` +
-                          `※見本生データ(頭50文字): ${debugData.step2Raw.substring(0, 50)}...</small>`;
+                          `<small style="opacity:0.8;">※かんばん生データ(頭40文字): ${debugData.step1Raw.substring(0, 40)}...<br>` +
+                          `※見本生データ(頭40文字): ${debugData.step2Raw.substring(0, 40)}...</small>`;
 }
 
 function resetAll() {
