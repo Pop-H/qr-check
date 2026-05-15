@@ -22,6 +22,9 @@
         #reader { width: 100%; background: black; border-radius: 8px; overflow: hidden; display: none; }
         .zoom-info { display: none; color: #fff; background: rgba(0,0,0,0.7); padding: 8px; font-size: 0.85rem; margin-top: 5px; border-radius: 4px; }
         
+        .result-card { display: none; padding: 20px; border-radius: 10px; color: white; margin-top: 20px; box-sizing: border-box; }
+        .tekin-display { font-size: 5.5rem; font-weight: bold; display: block; margin: 10px 0; background: white; color: black; border-radius: 10px; letter-spacing: 2px; }
+        
         .debug-box { background: rgba(0, 0, 0, 0.05); border: 1px dashed #6c757d; padding: 10px; text-align: left; font-family: monospace; font-size: 0.85rem; color: #333; margin-top: 15px; border-radius: 5px; word-break: break-all; }
         .debug-title { font-weight: bold; color: #000; border-bottom: 1px solid #ccc; margin-bottom: 5px; padding-bottom: 2px; }
         .res-debug { background: rgba(255, 255, 255, 0.2); border: 1px solid white; color: white; }
@@ -33,18 +36,15 @@
 </head>
 <body>
 
-<header>QR合否判定システム（会社検証・バグ修正版）</header>
+<header>QR合否判定システム（見本データ全表示版）</header>
 
 <div class="container">
     <div id="setup-view" class="config-section">
         <h3 style="margin-top:0; border-bottom:2px solid #007bff; padding-bottom:5px;">【初期設定】</h3>
-        
         <label for="honku-select">■ 本区の登録 (必須)</label>
-        <select id="honku-select" onchange="clearScanState()"><option value="">-- 本区を選択してください --</option></select>
-        
+        <select id="honku-select"><option value="">-- 本区を選択してください --</option></select>
         <label for="jiku-select">■ 次区の登録 (任意)</label>
-        <select id="jiku-select" onchange="clearScanState()"><option value="">-- 空白（指定なし） --</option></select>
-        
+        <select id="jiku-select"><option value="">-- 空白（指定なし） --</option></select>
         <button onclick="startProcess()">スキャン開始</button>
     </div>
 
@@ -97,25 +97,12 @@ window.onload = () => {
     if(localStorage.getItem('savedJiku')) jSelect.value = localStorage.getItem('savedJiku');
 };
 
-// ★本区・次区をいじった時に内部データを完全に真っさらにする関数
-function clearScanState() {
-    currentStep = 1;
-    isLock = false;
-    debugData = { step1Raw: "", kanbanHonku: "未検出", kanbanJiku: "未検出", kanbanPartNo: "未検出", step2Raw: "" };
-    const liveDebug = document.getElementById('live-debug');
-    if(liveDebug) { liveDebug.style.display = "none"; liveDebug.innerHTML = ""; }
-}
-
 function startProcess() {
     targetHonku = document.getElementById('honku-select').value;
     targetJiku = document.getElementById('jiku-select').value; 
     if (!targetHonku) { alert("本区を入力してください。"); return; }
     localStorage.setItem('savedHonku', targetHonku);
     localStorage.setItem('savedJiku', targetJiku);
-
-    // 開始前にもう一度状態をクリア
-    currentStep = 1;
-    isLock = false;
 
     document.getElementById('setup-view').style.display = 'none';
     document.getElementById('scanner-view').style.display = 'block';
@@ -139,7 +126,6 @@ function initScanner() {
                 const capabilities = videoTrack.getCapabilities();
                 if (capabilities.zoom) {
                     const targetZoom = capabilities.zoom.min + (capabilities.zoom.max - capabilities.zoom.min) * 0.25;
-                    videoTrack.advanced: [{ zoom: targetZoom }] ;
                     videoTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] });
                 }
             }
@@ -226,7 +212,7 @@ function handleKanbanScan(data) {
     vibrate(100);
 }
 
-// ステップ2: 見本QR
+// ステップ2: 見本QR（★最強の「大文字小文字無視・文字お掃除」突合へ）
 function handleMihonScan(data) {
     if (data === debugData.step1Raw) {
         return;
@@ -235,13 +221,17 @@ function handleMihonScan(data) {
     isLock = true; 
     debugData.step2Raw = data;
     
+    // かんばんから取った10桁（例: 0159874220）
     const target = debugData.kanbanPartNo;
+    // 頭の0を除いた9桁（例: 1598744220 の場合は 598744220）
     const targetShort = target.startsWith("0") ? target.substring(1) : target;
 
+    // 【お掃除処理】比較しやすくするため、大文字小文字をすべて「小文字」に統一し、ハイフンも消す
     const cleanMihonData = data.toLowerCase().replace(/-/g, "");
     const cleanTarget = target.toLowerCase();
     const cleanTargetShort = targetShort.toLowerCase();
 
+    // 突合チェック
     let isMatch = false;
     if (cleanMihonData.includes(cleanTarget) || cleanMihonData.includes(cleanTargetShort)) {
         isMatch = true;
@@ -253,6 +243,7 @@ function handleMihonScan(data) {
         return;
     }
 
+    // 合格処理：テーキン抽出 (かんばん品番の末尾4桁の頭3文字)
     const tekin = target.substring(target.length - 4, target.length - 1); 
 
     let displayPartNo = target;
@@ -263,6 +254,7 @@ function handleMihonScan(data) {
     showFinalResult(true, "生産ＯＫ<br>最後にテーキンの確認してください。", displayPartNo, tekin);
 }
 
+// 結果表示
 function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
     if(html5QrCode) html5QrCode.stop();
     document.getElementById('scanner-view').style.display = 'none';
@@ -283,13 +275,13 @@ function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
     }
     document.getElementById('result-content').innerHTML = html;
 
+    // ★重要：NGの時は見本QRのデータを全て削らず表示する仕様
     const resDebug = document.getElementById('result-debug');
     resDebug.innerHTML = `<div class="debug-title">📊 突合データの内訳（検証用）</div>` +
-                          `・設定本区 : ${targetHonku} ｜ 設定次区 : ${targetJiku || "指定なし"}<br>` +
                           `・かんばん品番 : <span style="font-weight:bold; font-size:1rem;">${debugData.kanbanPartNo}</span><br>` +
                           `─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─<br>` +
                           `【見本QRコードの全文字データ】<br>` +
-                          `<div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; font-size:0.75rem; margin-top:5px; word-break:break-all;">${debugData.step2Raw || "（未読込）"}</div>`;
+                          `<div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; font-size:0.75rem; margin-top:5px; word-break:break-all;">${debugData.step2Raw}</div>`;
 }
 
 function resetAll() {
