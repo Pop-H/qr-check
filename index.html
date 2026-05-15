@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>QR判定ツール（改良版）</title>
+    <title>QR判定ツール（見本QR改良版）</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root { --ok-color: #28a745; --ng-color: #dc3545; --main-bg: #f8f9fa; }
@@ -41,7 +41,7 @@
     <div id="scanner-view" style="display:none;">
         <h3 id="step-title">サイクルかんばんを読み取ってください</h3>
         <div id="reader"></div>
-        <div class="zoom-info">※細かいQRです。少し離してピントを合わせてください</div>
+        <div class="zoom-info">※少し離してピントを合わせてください</div>
         <button class="cancel" onclick="resetAll()">キャンセル</button>
     </div>
 
@@ -91,7 +91,6 @@ function startProcess() {
 function initScanner() {
     html5QrCode = new Html5Qrcode("reader");
     
-    // 改良：解像度を高めに設定し、JAMAの細かいQRを認識しやすくする
     const config = { 
         fps: 15, 
         qrbox: function(viewfinderWidth, viewfinderHeight) {
@@ -99,20 +98,18 @@ function initScanner() {
         },
         videoConstraints: {
             facingMode: "environment",
-            width: { ideal: 1920 }, // フルHD画質を要求
+            width: { ideal: 1920 }, 
             height: { ideal: 1080 }
         }
     };
     
     html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess)
     .then(() => {
-        // カメラ起動成功後に自動ズームを試みる（端末が対応している場合）
         setTimeout(() => {
             const videoTrack = html5QrCode.getRunningTrack();
             if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
                 const capabilities = videoTrack.getCapabilities();
                 if (capabilities.zoom) {
-                    // 最大ズームの20%〜30%程度に初期設定（近づけすぎ防止）
                     const targetZoom = capabilities.zoom.min + (capabilities.zoom.max - capabilities.zoom.min) * 0.25;
                     videoTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] });
                 }
@@ -129,26 +126,21 @@ function onScanSuccess(decodedText) {
     }
 }
 
-// ステップ1: サイクルかんばん読み取り（JAMA規格解析）
+// ステップ1: サイクルかんばん読み取り
 function handleKanbanScan(data) {
     if (data.startsWith("ISLB")) {
         alert("サイクルかんばんから読み込んでください。");
         return;
     }
 
-    // 改良：JAMA規格の文字列を空白で区切って正確に位置を特定する
-    // 連続した空白を1つにまとめて分割
     const tokens = data.trim().split(/\s+/);
-    
     let scannedHonku = "";
     if (tokens.length >= 3) {
-        // 通常のJAMA規格の並びであれば、2番目が本区(T120等)、3番目が次区(A200等)
         scannedHonku = tokens[1];
     } else {
-        // 万が一空白区切りが失敗した場合のバックアップ（文字列の後方から検索）
         const fallbackMatch = data.match(/[A-Z]\d{3}/g);
         if (fallbackMatch && fallbackMatch.length >= 2) {
-            scannedHonku = fallbackMatch[fallbackMatch.length - 2]; // 後ろから2番目
+            scannedHonku = fallbackMatch[fallbackMatch.length - 2]; 
         }
     }
 
@@ -157,16 +149,14 @@ function handleKanbanScan(data) {
         return;
     }
 
-    // 品番の抽出 (Kから始まる塊を見つける)
     let foundPartNo = "";
     for (const token of tokens) {
         if (token.startsWith("K") && token.length >= 11) {
-            foundPartNo = token.substring(1, 11); // Kの後の10桁
+            foundPartNo = token.substring(1, 11); 
             break;
         }
     }
 
-    // バックアップ：もし空白区切りの中にKが見つからなかった場合
     if (!foundPartNo) {
         const kIndex = data.indexOf("K");
         if (kIndex !== -1) {
@@ -175,36 +165,62 @@ function handleKanbanScan(data) {
     }
 
     if (!foundPartNo) {
-        alert("品番情報(K)が見つかりません。正しいかんばんか確認してください。");
+        alert("品番情報(K)が見つかりません。");
         return;
     }
 
-    kanbanPartNo = foundPartNo; // ハイフンなし10桁を保持
+    kanbanPartNo = foundPartNo; // ハイフンなし10桁
 
-    // OKなら次のステップへ
     currentStep = 2;
     document.getElementById('step-title').innerText = "見本のQRコードを読み取ってください";
     vibrate(100);
 }
 
-// ステップ2: 見本QR読み取り
+// ステップ2: 見本QR読み取り（★改良版ロジック）
 function handleMihonScan(data) {
-    const partMatch = data.match(/\d{6}-\d{4}/);
-    if (!partMatch) {
-        alert("見本QRから品番を読み取れません。");
+    let mihonPartNoRaw = "";
+
+    if (data.startsWith("ISLB")) {
+        // 先頭のISLBを消し、そこから続く数字とハイフンの塊（11桁前後）を引っこ抜く
+        const cleanData = data.replace("ISLB", "").trim();
+        const partMatch = cleanData.match(/[0-9-]+/);
+        if (partMatch) {
+            mihonPartNoRaw = partMatch[0].trim();
+        }
+    } else {
+        // 万が一ISLBから始まらない見本QRだった場合のバックアップ
+        const generalMatch = data.match(/[0-9]{5,6}-[0-9]{4}/);
+        if (generalMatch) {
+            mihonPartNoRaw = generalMatch[0];
+        }
+    }
+
+    // 抽出できなかった場合のエラー
+    if (!mihonPartNoRaw) {
+        alert(`見本QRから品番を読み取れませんでした。\n(読んだ中身: ${data.substring(0, 20)}...)`);
         return;
     }
-    const mihonPartNoRaw = partMatch[0];
-    const mihonPartNoClean = mihonPartNoRaw.replace("-", "");
+
+    // ハイフンを抜いて比較用に10桁の数字にする
+    const mihonPartNoClean = mihonPartNoRaw.replace(/-/g, "");
 
     if (mihonPartNoClean !== kanbanPartNo) {
-        showFinalResult(false, "使用するサイクルかんばんと見本が異なります。");
+        showFinalResult(false, `使用するサイクルかんばんと見本が異なります。<br><small>(かんばん: ${kanbanPartNo} / 見本: ${mihonPartNoClean})</small>`);
         return;
     }
 
-    // 全て一致
-    const tekin = mihonPartNoRaw.substring(7, 10); 
-    showFinalResult(true, "生産OK<br>最後にテーキンの確認してください。", mihonPartNoRaw, tekin);
+    // 全て一致（テーキン抽出）
+    // 後ろ4桁（例:-3050なら3050）の頭3文字をテーキンとする
+    const cleanLen = mihonPartNoClean.length;
+    const tekin = mihonPartNoClean.substring(cleanLen - 4, cleanLen - 1); 
+
+    // 表示用に綺麗にハイフンを入れる（もしハイフンが元々なければ綺麗に整形して出す）
+    let displayPartNo = mihonPartNoRaw;
+    if (!displayPartNo.includes("-") && displayPartNo.length === 10) {
+        displayPartNo = displayPartNo.substring(0, 6) + "-" + displayPartNo.substring(6, 10);
+    }
+
+    showFinalResult(true, "生産OK<br>最後にテーキンの確認してください。", displayPartNo, tekin);
 }
 
 function showFinalResult(isSuccess, msg, partNo = "", tekin = "") {
